@@ -1,4 +1,4 @@
-# mach-objc: Generated Objective-C bindings for Zig
+# mach-objc-generator: Generated Objective-C bindings for Zig
 
 Zig Objective-C API binding generator, e.g. for generating bindings to Metal.
 

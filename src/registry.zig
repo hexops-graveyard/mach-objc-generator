@@ -1,8 +1,9 @@
 const std = @import("std");
 
+// Types are dynamically allocated into the converter's arena so do not need a deinit
 pub const Type = union(enum) {
     void,
-    bool: void,
+    bool,
     int: u8,
     uint: u8,
     float: u8,
@@ -16,8 +17,9 @@ pub const Type = union(enum) {
     c_ulonglong,
     name: []const u8,
     pointer: Pointer,
-    instance_type: void,
+    instance_type,
     function: Function,
+    generic: Generic,
 
     pub const Pointer = struct {
         is_single: bool,
@@ -27,7 +29,13 @@ pub const Type = union(enum) {
     };
 
     pub const Function = struct {
-        // TODO
+        return_type: *Type,
+        params: std.ArrayList(Type),
+    };
+
+    pub const Generic = struct {
+        base_type: *Type,
+        args: std.ArrayList(Type),
     };
 };
 
@@ -148,10 +156,12 @@ pub const Container = struct {
 
 pub const Registry = struct {
     const Self = @This();
+    const TypedefHashMap = std.StringHashMap(Type);
     const EnumHashMap = std.StringHashMap(*Enum);
     const ContainerHashMap = std.StringHashMap(*Container);
 
     allocator: std.mem.Allocator,
+    typedefs: TypedefHashMap,
     enums: EnumHashMap,
     protocols: ContainerHashMap,
     interfaces: ContainerHashMap,
@@ -159,6 +169,7 @@ pub const Registry = struct {
     pub fn init(allocator: std.mem.Allocator) Registry {
         return Registry{
             .allocator = allocator,
+            .typedefs = TypedefHashMap.init(allocator),
             .enums = EnumHashMap.init(allocator),
             .protocols = ContainerHashMap.init(allocator),
             .interfaces = ContainerHashMap.init(allocator),
@@ -166,6 +177,7 @@ pub const Registry = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.typedefs.deinit();
         self.deinitMap(&self.enums);
         self.deinitMap(&self.protocols);
         self.deinitMap(&self.interfaces);

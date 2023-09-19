@@ -27,11 +27,13 @@ pub const Token = struct {
         comma,
         lparen,
         rparen,
+        lbracket,
+        rbracket,
         less,
         greater,
         caret,
         star,
-        kw_api_available,
+        quote,
         kw_bool,
         kw_char,
         kw_class,
@@ -46,9 +48,12 @@ pub const Token = struct {
         kw_int16_t,
         kw_int32_t,
         kw_int64_t,
+        kw_kindof,
         kw_long,
         kw_nonnull,
         kw_nullable,
+        kw_null_unspecified,
+        kw_nullable_result,
         kw_short,
         kw_sel,
         kw_struct,
@@ -110,9 +115,7 @@ pub const Lexer = struct {
                     }
 
                     const text = self.source[start..self.offset];
-                    const kind = if (std.mem.eql(u8, text, "API_AVAILABLE"))
-                        Token.Kind.kw_api_available
-                    else if (std.mem.eql(u8, text, "BOOL"))
+                    const kind = if (std.mem.eql(u8, text, "BOOL"))
                         Token.Kind.kw_bool
                     else if (std.mem.eql(u8, text, "char"))
                         Token.Kind.kw_char
@@ -140,12 +143,18 @@ pub const Lexer = struct {
                         Token.Kind.kw_int32_t
                     else if (std.mem.eql(u8, text, "int64_t"))
                         Token.Kind.kw_int64_t
+                    else if (std.mem.eql(u8, text, "__kindof"))
+                        Token.Kind.kw_kindof
                     else if (std.mem.eql(u8, text, "long"))
                         Token.Kind.kw_long
                     else if (std.mem.eql(u8, text, "_Nonnull"))
                         Token.Kind.kw_nonnull
                     else if (std.mem.eql(u8, text, "_Nullable"))
                         Token.Kind.kw_nullable
+                    else if (std.mem.eql(u8, text, "_Null_unspecified"))
+                        Token.Kind.kw_null_unspecified
+                    else if (std.mem.eql(u8, text, "_Nullable_result"))
+                        Token.Kind.kw_nullable_result
                     else if (std.mem.eql(u8, text, "SEL"))
                         Token.Kind.kw_sel
                     else if (std.mem.eql(u8, text, "short"))
@@ -177,6 +186,14 @@ pub const Lexer = struct {
                     self.skip();
                     return self.token(Token.Kind.rparen, start);
                 },
+                '[' => {
+                    self.skip();
+                    return self.token(Token.Kind.lbracket, start);
+                },
+                ']' => {
+                    self.skip();
+                    return self.token(Token.Kind.rbracket, start);
+                },
                 '<' => {
                     self.skip();
                     return self.token(Token.Kind.less, start);
@@ -193,6 +210,10 @@ pub const Lexer = struct {
                     self.skip();
                     return self.token(Token.Kind.star, start);
                 },
+                '"' => {
+                    self.skip();
+                    return self.token(Token.Kind.quote, start);
+                },
                 ',' => {
                     self.skip();
                     return self.token(Token.Kind.comma, start);
@@ -205,7 +226,8 @@ pub const Lexer = struct {
                     return self.token(Token.Kind.eof, start);
                 },
                 else => {
-                    std.debug.print("Unexpected character {c}\n", .{c});
+                    std.debug.print("Unexpected character {c} {}\n", .{ c, c });
+                    std.debug.print("Parsing {s}\n", .{self.source});
                     return error.UnexpectedCharacter;
                 },
             }
@@ -231,6 +253,7 @@ pub const Lexer = struct {
 
 pub const Parser = struct {
     const Self = @This();
+    const PointerProps = struct { is_const: bool, is_optional: bool };
 
     allocator: std.mem.Allocator,
     lookahead: Token,
@@ -241,57 +264,61 @@ pub const Parser = struct {
     }
 
     pub fn parseType(self: *Self) !Type {
-        if (self.lookahead.kind == .kw_api_available) {
-            try self.match(.kw_api_available);
-
-            var nestLevel: u32 = 0;
-            while (true) {
-                if (self.lookahead.kind == .lparen) {
-                    try self.match(.lparen);
-                    nestLevel = nestLevel + 1;
-                } else if (self.lookahead.kind == .rparen) {
-                    try self.match(.rparen);
-                    nestLevel = nestLevel - 1;
-                } else {
-                    self.lookahead = try self.lexer.next();
-                }
-                if (nestLevel == 0)
-                    break;
+        if (self.lookahead.kind == .id) {
+            const text = self.lookahead.text;
+            if (std.mem.eql(u8, text, "API_AVAILABLE")) {
+                try self.match(.id);
+                try self.skipParenContent();
+            } else if (std.mem.eql(u8, text, "API_UNAVAILABLE")) {
+                try self.match(.id);
+                try self.skipParenContent();
+            } else if (std.mem.eql(u8, text, "API_DEPRECATED_WITH_REPLACEMENT")) {
+                try self.match(.id);
+                try self.skipParenContent();
+            } else if (std.mem.eql(u8, text, "NS_SWIFT_UNAVAILABLE")) {
+                try self.match(.id);
+                try self.skipParenContent();
+            } else if (std.mem.eql(u8, text, "NS_SWIFT_UNAVAILABLE_FROM_ASYNC")) {
+                try self.match(.id);
+                try self.skipParenContent();
             }
         }
-
         const is_const = self.lookahead.kind == .kw_const;
         if (is_const)
             try self.match(.kw_const);
 
+        // TODO - what does this mean?
+        if (self.lookahead.kind == .kw_kindof)
+            try self.match(.kw_kindof);
+
         switch (self.lookahead.kind) {
             .kw_void => {
                 try self.match(.kw_void);
-                return self.parsePointer(.{ .void = {} }, is_const, false);
+                return self.parseTypeSuffix(.{ .void = {} }, is_const, false);
             },
             .kw_bool => {
                 try self.match(.kw_bool);
-                return self.parsePointer(.{ .bool = {} }, is_const, false);
+                return self.parseTypeSuffix(.{ .bool = {} }, is_const, false);
             },
             .kw_char => {
                 try self.match(.kw_char);
-                return self.parsePointer(.{ .uint = 8 }, is_const, false);
+                return self.parseTypeSuffix(.{ .uint = 8 }, is_const, false);
             },
             .kw_short => {
                 try self.match(.kw_short);
-                return self.parsePointer(.{ .c_short = {} }, is_const, false);
+                return self.parseTypeSuffix(.{ .c_short = {} }, is_const, false);
             },
             .kw_int => {
                 try self.match(.kw_int);
-                return self.parsePointer(.{ .c_int = {} }, is_const, false);
+                return self.parseTypeSuffix(.{ .c_int = {} }, is_const, false);
             },
             .kw_long => {
                 try self.match(.kw_long);
                 if (self.lookahead.kind == .kw_long) {
                     try self.match(.kw_long);
-                    return self.parsePointer(.{ .c_longlong = {} }, is_const, false);
+                    return self.parseTypeSuffix(.{ .c_longlong = {} }, is_const, false);
                 } else {
-                    return self.parsePointer(.{ .c_long = {} }, is_const, false);
+                    return self.parseTypeSuffix(.{ .c_long = {} }, is_const, false);
                 }
             },
             .kw_unsigned => {
@@ -299,82 +326,89 @@ pub const Parser = struct {
                 switch (self.lookahead.kind) {
                     .kw_char => {
                         try self.match(.kw_char);
-                        return self.parsePointer(.{ .uint = 8 }, is_const, false);
+                        return self.parseTypeSuffix(.{ .uint = 8 }, is_const, false);
                     },
                     .kw_short => {
                         try self.match(.kw_short);
-                        return self.parsePointer(.{ .c_ushort = {} }, is_const, false);
+                        return self.parseTypeSuffix(.{ .c_ushort = {} }, is_const, false);
                     },
                     .kw_int => {
                         try self.match(.kw_int);
-                        return self.parsePointer(.{ .c_uint = {} }, is_const, false);
+                        return self.parseTypeSuffix(.{ .c_uint = {} }, is_const, false);
                     },
                     .kw_long => {
                         try self.match(.kw_long);
                         if (self.lookahead.kind == .kw_long) {
                             try self.match(.kw_long);
-                            return self.parsePointer(.{ .c_ulonglong = {} }, is_const, false);
+                            return self.parseTypeSuffix(.{ .c_ulonglong = {} }, is_const, false);
                         } else {
-                            return self.parsePointer(.{ .c_ulong = {} }, is_const, false);
+                            return self.parseTypeSuffix(.{ .c_ulong = {} }, is_const, false);
                         }
                     },
                     else => {
-                        return self.parsePointer(.{ .c_uint = {} }, is_const, false);
+                        return self.parseTypeSuffix(.{ .c_uint = {} }, is_const, false);
                     },
                 }
             },
             .kw_int8_t => {
                 try self.match(.kw_int8_t);
-                return self.parsePointer(.{ .int = 8 }, is_const, false);
+                return self.parseTypeSuffix(.{ .int = 8 }, is_const, false);
             },
             .kw_int16_t => {
                 try self.match(.kw_int16_t);
-                return self.parsePointer(.{ .int = 16 }, is_const, false);
+                return self.parseTypeSuffix(.{ .int = 16 }, is_const, false);
             },
             .kw_int32_t => {
                 try self.match(.kw_int32_t);
-                return self.parsePointer(.{ .int = 32 }, is_const, false);
+                return self.parseTypeSuffix(.{ .int = 32 }, is_const, false);
             },
             .kw_int64_t => {
                 try self.match(.kw_int64_t);
-                return self.parsePointer(.{ .int = 64 }, is_const, false);
+                return self.parseTypeSuffix(.{ .int = 64 }, is_const, false);
             },
             .kw_uint => {
                 try self.match(.kw_uint);
-                return self.parsePointer(.{ .uint = 32 }, is_const, false);
+                return self.parseTypeSuffix(.{ .uint = 32 }, is_const, false);
             },
             .kw_uint8_t => {
                 try self.match(.kw_uint8_t);
-                return self.parsePointer(.{ .uint = 8 }, is_const, false);
+                return self.parseTypeSuffix(.{ .uint = 8 }, is_const, false);
             },
             .kw_uint16_t => {
                 try self.match(.kw_uint16_t);
-                return self.parsePointer(.{ .uint = 16 }, is_const, false);
+                return self.parseTypeSuffix(.{ .uint = 16 }, is_const, false);
             },
             .kw_uint32_t => {
                 try self.match(.kw_uint32_t);
-                return self.parsePointer(.{ .uint = 32 }, is_const, false);
+                return self.parseTypeSuffix(.{ .uint = 32 }, is_const, false);
             },
             .kw_uint64_t => {
                 try self.match(.kw_uint64_t);
-                return self.parsePointer(.{ .uint = 64 }, is_const, false);
+                return self.parseTypeSuffix(.{ .uint = 64 }, is_const, false);
             },
             .kw_float => {
                 try self.match(.kw_float);
-                return self.parsePointer(.{ .float = 32 }, is_const, false);
+                return self.parseTypeSuffix(.{ .float = 32 }, is_const, false);
             },
             .kw_double => {
                 try self.match(.kw_double);
-                return self.parsePointer(.{ .float = 64 }, is_const, false);
+                return self.parseTypeSuffix(.{ .float = 64 }, is_const, false);
             },
             .kw_class => {
                 try self.match(.kw_class);
+                const props = try self.parsePointerProps(is_const);
+
                 const t = Type{ .name = "c.objc_class" };
 
                 const child = try self.allocator.create(Type);
                 child.* = t;
 
-                return Type{ .pointer = .{ .is_single = true, .is_const = is_const, .is_optional = false, .child = child } };
+                return Type{ .pointer = .{
+                    .is_single = true,
+                    .is_const = props.is_const,
+                    .is_optional = props.is_optional,
+                    .child = child,
+                } };
             },
             .kw_sel => {
                 try self.match(.kw_sel);
@@ -389,10 +423,12 @@ pub const Parser = struct {
 
                 if (self.lookahead.kind == .less) {
                     try self.match(.less);
-                    const t = try self.parseTypeList();
+                    const types = try self.parseTypeList();
                     try self.match(.greater);
 
-                    return self.parsePointerSuffix(t, is_const, true);
+                    // TODO - how should handle multiple types?
+
+                    return self.parsePointerSuffix(types.items[0], is_const, true);
                 } else {
                     const t = Type{ .name = "c.objc_object" };
                     return self.parsePointerSuffix(t, is_const, true);
@@ -400,7 +436,19 @@ pub const Parser = struct {
             },
             .kw_imp => {
                 try self.match(.kw_imp);
-                return self.parsePointer(.{ .function = .{} }, is_const, true);
+
+                //void (*)(void)
+                const return_type = try self.allocator.create(Type);
+                return_type.* = .{ .void = {} };
+
+                const ty = .{
+                    .function = .{
+                        .return_type = return_type,
+                        .params = std.ArrayList(Type).init(self.allocator),
+                    },
+                };
+
+                return self.parseTypeSuffix(ty, is_const, true);
             },
             .kw_instancetype => {
                 try self.match(.kw_instancetype);
@@ -414,43 +462,99 @@ pub const Parser = struct {
                 try self.match(.kw_struct);
                 const name = self.lookahead.text;
                 try self.match(.id);
-                return self.parsePointer(.{ .name = name }, is_const, false);
+                return self.parseTypeSuffix(.{ .name = name }, is_const, false);
             },
             else => {
-                const name = self.lookahead.text;
+                const text = self.lookahead.text;
                 try self.match(.id);
-                return self.parsePointer(.{ .name = name }, is_const, false);
+                return self.parseTypeSuffix(.{ .name = text }, is_const, false);
             },
         }
     }
 
-    fn parseTypeList(self: *Self) (ParseError || error{OutOfMemory})!Type {
-        const t = try self.parseType();
-        if (self.lookahead.kind == .comma) {
+    fn parseTypeList(self: *Self) (ParseError || error{OutOfMemory})!std.ArrayList(Type) {
+        var types = std.ArrayList(Type).init(self.allocator);
+
+        try types.append(try self.parseType());
+        while (self.lookahead.kind == .comma) {
             try self.match(.comma);
-            // TODO - how to handle?
-            _ = try self.parseTypeList();
+            try types.append(try self.parseType());
         }
 
-        return t;
+        return types;
     }
 
-    fn parsePointer(self: *Self, elem_type: Type, elem_is_const: bool, is_single: bool) !Type {
+    fn parseTypeSuffix(self: *Self, base_type: Type, is_const: bool, is_single: bool) !Type {
         if (self.lookahead.kind == .star) {
             try self.match(.star);
 
-            return self.parsePointerSuffix(elem_type, elem_is_const, is_single);
+            return self.parsePointerSuffix(base_type, is_const, is_single);
+        } else if (self.lookahead.kind == .lbracket) {
+            // TODO - handle arrays
+            try self.match(.lbracket);
+            if (self.lookahead.kind == .int)
+                try self.match(.int);
+            try self.match(.rbracket);
+
+            return self.parsePointerSuffix(base_type, is_const, is_single);
+        } else if (self.lookahead.kind == .lparen) {
+            try self.match(.lparen);
+
+            if (self.lookahead.kind == .star) {
+                try self.match(.star);
+
+                const props = try self.parsePointerProps(is_const);
+                _ = props;
+
+                try self.match(.rparen);
+                try self.match(.lparen);
+                _ = try self.parseTypeList();
+                try self.match(.rparen);
+            } else if (self.lookahead.kind == .caret) {
+                try self.match(.caret);
+
+                const props = try self.parsePointerProps(is_const);
+                _ = props;
+
+                try self.match(.rparen);
+                try self.match(.lparen);
+                const params = try self.parseTypeList();
+                try self.match(.rparen);
+
+                const return_type = try self.allocator.create(Type);
+                return_type.* = base_type;
+
+                return .{
+                    .function = .{
+                        .return_type = return_type,
+                        .params = params,
+                    },
+                };
+            } else {
+                _ = try self.parseTypeList();
+                try self.match(.rparen);
+            }
+
+            return base_type;
+        } else if (self.lookahead.kind == .less) {
+            try self.match(.less);
+            const types = try self.parseTypeList();
+            try self.match(.greater);
+
+            const child = try self.allocator.create(Type);
+            child.* = base_type;
+
+            return self.parseTypeSuffix(.{ .generic = .{ .base_type = child, .args = types } }, is_const, true);
         } else {
-            return elem_type;
+            const props = try self.parsePointerProps(false);
+            _ = props;
+
+            return base_type;
         }
     }
 
-    fn parsePointerSuffix(self: *Self, elem_type: Type, elem_is_const: bool, is_single: bool) error{
-        OutOfMemory,
-        UnexpectedToken,
-        UnexpectedCharacter,
-    }!Type {
-        var is_const = false;
+    fn parsePointerProps(self: *Self, elem_is_const: bool) !PointerProps {
+        var is_const = elem_is_const;
         var is_optional = false;
         while (true) {
             if (self.lookahead.kind == .kw_const) {
@@ -461,19 +565,49 @@ pub const Parser = struct {
                 is_optional = true;
             } else if (self.lookahead.kind == .kw_nonnull) {
                 try self.match(.kw_nonnull);
+            } else if (self.lookahead.kind == .kw_null_unspecified) {
+                try self.match(.kw_null_unspecified);
+            } else if (self.lookahead.kind == .kw_nullable_result) {
+                try self.match(.kw_nullable_result);
             } else break;
         }
 
+        return .{ .is_const = is_const, .is_optional = is_optional };
+    }
+
+    fn parsePointerSuffix(self: *Self, base_type: Type, is_const: bool, is_single: bool) error{
+        OutOfMemory,
+        UnexpectedToken,
+        UnexpectedCharacter,
+    }!Type {
+        const props = try self.parsePointerProps(is_const);
         const child = try self.allocator.create(Type);
-        child.* = elem_type;
+        child.* = base_type;
 
         const t = Type{ .pointer = .{
             .is_single = is_single,
-            .is_const = elem_is_const or is_const,
-            .is_optional = is_optional,
+            .is_const = props.is_const,
+            .is_optional = props.is_optional,
             .child = child,
         } };
-        return self.parsePointer(t, false, is_single);
+        return self.parseTypeSuffix(t, false, is_single);
+    }
+
+    fn skipParenContent(self: *Self) !void {
+        var nestLevel: u32 = 0;
+        while (true) {
+            if (self.lookahead.kind == .lparen) {
+                try self.match(.lparen);
+                nestLevel = nestLevel + 1;
+            } else if (self.lookahead.kind == .rparen) {
+                try self.match(.rparen);
+                nestLevel = nestLevel - 1;
+            } else {
+                self.lookahead = try self.lexer.next();
+            }
+            if (nestLevel == 0)
+                break;
+        }
     }
 
     fn match(self: *Self, k: Token.Kind) !void {
@@ -595,7 +729,7 @@ pub const Converter = struct {
             } else if (std.mem.eql(u8, childKind, "RecordDecl")) {
                 self.convertRecordDecl(child);
             } else if (std.mem.eql(u8, childKind, "TypedefDecl")) {
-                self.convertTypedefDecl(child);
+                try self.convertTypedefDecl(child);
             } else if (std.mem.eql(u8, childKind, "VarDecl")) {
                 self.convertVarDecl(child);
             }
@@ -694,9 +828,10 @@ pub const Converter = struct {
         _ = n;
     }
 
-    fn convertTypedefDecl(self: *Self, n: std.json.Value) void {
-        _ = self;
-        _ = n;
+    fn convertTypedefDecl(self: *Self, n: std.json.Value) !void {
+        const name = getString(n, "name");
+        const ty = try self.convertType(getObject(n, "type").?);
+        try registry.typedefs.put(name, ty);
     }
 
     fn convertVarDecl(self: *Self, n: std.json.Value) void {
@@ -1029,51 +1164,7 @@ fn Generator(comptime WriterType: type) type {
             }
 
             for (container.methods.items) |method| {
-                try self.writer.writeAll("            pub fn ");
-                try self.generateMethodName(method.name);
-                try self.writer.print("(", .{});
-                var first = true;
-                if (method.instance) {
-                    try self.writer.print("self_: *T", .{});
-                    first = false;
-                }
-                for (method.params.items) |param| {
-                    if (!first)
-                        try self.writer.writeAll(", ");
-                    first = false;
-                    try self.writer.print("{s}_: ", .{param.name});
-                    try self.generateType(param.ty);
-                }
-                try self.writer.print(") ", .{});
-                try self.generateType(method.return_type);
-                try self.writer.print(" {{\n", .{});
-                try self.writer.print("                return @as(*const fn (", .{});
-                if (method.instance) {
-                    try self.writer.print("*T", .{});
-                } else {
-                    try self.writer.print("*c.objc_class", .{});
-                }
-                try self.writer.print(", *c.objc_selector", .{});
-                for (method.params.items) |param| {
-                    try self.writer.writeAll(", ");
-                    try self.generateType(param.ty);
-                }
-                try self.writer.print(") callconv(.C) ", .{});
-                try self.generateType(method.return_type);
-                try self.writer.print(", @ptrCast(&c.objc_msgSend))(", .{});
-                if (method.instance) {
-                    try self.writer.print("self_", .{});
-                } else {
-                    try self.writer.print("T.class()", .{});
-                }
-                try self.writer.print(", sel_", .{});
-                try self.generateSelectorName(method.name);
-                for (method.params.items) |param| {
-                    try self.writer.writeAll(", ");
-                    try self.writer.print("{s}_", .{param.name});
-                }
-                try self.writer.print(");\n", .{});
-                try self.writer.print("            }}\n", .{});
+                try self.generateMethod(container, method);
             }
 
             try self.writer.print("        }};\n", .{});
@@ -1084,12 +1175,158 @@ fn Generator(comptime WriterType: type) type {
             }
         }
 
+        fn generateMethod(self: *Self, container: *Container, method: Method) !void {
+            if (container.super) |super| {
+                if (self.doesParentHaveMethod(super, method.name))
+                    return;
+            }
+
+            try self.writer.writeAll("            pub fn ");
+            try self.generateMethodName(method.name);
+            try self.writer.print("(", .{});
+            try self.generateMethodParams(method);
+            try self.writer.print(") ", .{});
+            try self.generateType(method.return_type);
+            try self.writer.print(" {{\n", .{});
+            try self.generateBlockHelpers(method);
+            try self.writer.writeAll("                return @as(");
+            try self.generateObjcSignature(method);
+            try self.writer.writeAll(", @ptrCast(&c.objc_msgSend))(");
+            try self.generateMethodArgs(method);
+            try self.writer.print(");\n", .{});
+            try self.writer.print("            }}\n", .{});
+        }
+
+        fn doesParentHaveMethod(self: *Self, container: *Container, name: []const u8) bool {
+            if (container.super) |super| {
+                if (self.doesParentHaveMethod(super, name))
+                    return true;
+            }
+
+            for (container.methods.items) |method| {
+                if (std.mem.eql(u8, method.name, name))
+                    return true;
+            }
+
+            return false;
+        }
+
         fn generateMethodName(self: *Self, name: []const u8) !void {
             if (isKeyword(name)) {
                 try self.writer.print("@\"{s}\"", .{name});
             } else {
                 try self.generateSelectorName(trimTrailingColon(name));
             }
+        }
+
+        fn generateMethodParams(self: *Self, method: Method) !void {
+            var first = true;
+            if (method.instance) {
+                try self.writer.print("self_: *T", .{});
+                first = false;
+            }
+            for (method.params.items) |param| {
+                if (!first)
+                    try self.writer.writeAll(", ");
+                first = false;
+                try self.generateMethodParam(param);
+            }
+        }
+
+        fn generateMethodParam(self: *Self, param: Param) !void {
+            if (getBlockType(param)) |f| {
+                try self.writer.writeAll("context: anytype, comptime ");
+                try self.writer.print("{s}_: ", .{param.name});
+                try self.writer.writeAll("fn (ctx: @TypeOf(context)");
+                for (f.params.items) |param_ty| {
+                    try self.writer.writeAll(", _: ");
+                    try self.generateType(param_ty);
+                }
+                try self.writer.writeAll(") ");
+                try self.generateType(f.return_type.*);
+            } else {
+                try self.writer.print("{s}_: ", .{param.name});
+                try self.generateType(param.ty);
+            }
+        }
+
+        fn generateBlockHelpers(self: *Self, method: Method) !void {
+            for (method.params.items) |param| {
+                if (getBlockType(param)) |f| {
+                    try self.writer.writeAll("                const Literal = ns.BlockLiteral(@TypeOf(context));\n");
+                    try self.writer.writeAll("                const Helper = struct {\n");
+                    try self.writer.writeAll("                    pub fn cCallback(literal: *Literal");
+                    for (f.params.items, 0..) |param_ty, i| {
+                        try self.writer.print(", a{d}: ", .{i});
+                        try self.generateType(param_ty);
+                    }
+                    try self.writer.writeAll(") callconv(.C) void {\n");
+                    try self.writer.print("                        {s}_(literal.context", .{param.name});
+                    for (0..f.params.items.len) |i| {
+                        try self.writer.print(", a{d}", .{i});
+                    }
+                    try self.writer.writeAll(");\n");
+                    try self.writer.writeAll("                    }\n");
+                    try self.writer.writeAll("                };\n");
+                    try self.writer.writeAll("                const descriptor = ns.BlockDescriptor{ .reserved = 0, .size = @sizeOf(Literal) };\n");
+                    try self.writer.writeAll("                const block = Literal{ .isa = _NSConcreteStackBlock, .flags = 0, .reserved = 0, .invoke = @ptrCast(&Helper.cCallback), .descriptor = &descriptor, .context = context };\n");
+                }
+            }
+        }
+
+        fn generateObjcSignature(self: *Self, method: Method) !void {
+            try self.writer.writeAll("*const fn (");
+            if (method.instance) {
+                try self.writer.writeAll("*T");
+            } else {
+                try self.writer.writeAll("*c.objc_class");
+            }
+            try self.writer.writeAll(", *c.objc_selector");
+            for (method.params.items) |param| {
+                try self.writer.writeAll(", ");
+                if (getBlockType(param)) |_| {
+                    try self.writer.writeAll("*const anyopaque");
+                } else {
+                    try self.generateType(param.ty);
+                }
+            }
+            try self.writer.writeAll(") callconv(.C) ");
+            try self.generateType(method.return_type);
+        }
+
+        fn generateMethodArgs(self: *Self, method: Method) !void {
+            if (method.instance) {
+                try self.writer.print("self_", .{});
+            } else {
+                try self.writer.print("T.class()", .{});
+            }
+            try self.writer.print(", sel_", .{});
+            try self.generateSelectorName(method.name);
+
+            for (method.params.items) |param| {
+                try self.writer.writeAll(", ");
+                if (getBlockType(param)) |_| {
+                    try self.writer.writeAll("@ptrCast(&block)");
+                } else {
+                    try self.writer.print("{s}_", .{param.name});
+                }
+            }
+        }
+
+        fn getBlockType(param: Param) ?Type.Function {
+            switch (param.ty) {
+                .name => |s| {
+                    if (registry.typedefs.get(s)) |t| {
+                        return switch (t) {
+                            .function => |f| f,
+                            else => null,
+                        };
+                    }
+                },
+                .function => |f| return f,
+                else => return null,
+            }
+            return null;
         }
 
         fn generateSelectorName(self: *Self, name: []const u8) !void {
@@ -1166,8 +1403,25 @@ fn Generator(comptime WriterType: type) type {
                         try self.generateType(p.child.*);
                     }
                 },
-                .function => {
-                    try self.writer.writeAll("fn () callconv(.C) void");
+                .function => |f| {
+                    try self.writer.writeAll("fn (");
+                    for (f.params.items, 0..) |param_ty, i| {
+                        if (i > 0)
+                            try self.writer.writeAll(", ");
+                        try self.generateType(param_ty);
+                    }
+                    try self.writer.writeAll(") callconv(.C) ");
+                    try self.generateType(f.return_type.*);
+                },
+                .generic => |g| {
+                    try self.generateType(g.base_type.*);
+                    try self.writer.writeAll("(");
+                    for (g.args.items, 0..) |arg, i| {
+                        if (i > 0)
+                            try self.writer.writeAll(", ");
+                        try self.generateType(arg);
+                    }
+                    try self.writer.writeAll(")");
                 },
             }
         }

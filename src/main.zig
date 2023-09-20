@@ -1926,3 +1926,7 @@ pub fn main() anyerror!void {
 
     try generator.generate();
 }
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}

@@ -1506,7 +1506,6 @@ fn generateMetal(generator: anytype) !void {
     try generator.addEnum("MTLDataType");
     try generator.addEnum("MTLBindingType");
     try generator.addEnum("MTLArgumentType");
-    try generator.addEnum("MTLArgumentAccess");
     try generator.addInterface("MTLType");
     try generator.addInterface("MTLStructMember");
     try generator.addInterface("MTLStructType");
@@ -1895,11 +1894,68 @@ fn generateMetal(generator: anytype) !void {
     try generator.addProtocol("MTLVisibleFunctionTable");
 }
 
+fn generateAudioSession(generator: anytype) !void {
+    try generator.addEnum("AVAudioSessionCategoryOptions");
+    try generator.addEnum("AVAudioSessionRouteSharingPolicy");
+    try generator.addEnum("AVAudioSessionPortOverride");
+    try generator.addEnum("AVAudioSessionRecordPermission");
+    try generator.addEnum("AVAudioSessionSetActiveOptions");
+    try generator.addEnum("AVAudioSessionActivationOptions");
+    try generator.addEnum("AVAudioStereoOrientation");
+    try generator.addEnum("AVAudioSessionPromptStyle");
+    try generator.addEnum("AVAudioSessionIOType");
+
+    try generator.addInterface("AVAudioSession");
+    try generator.addInterface("AVAudioSessionPortDescription");
+    try generator.addInterface("AVAudioSessionDataSourceDescription");
+    try generator.addInterface("AVAudioSessionRouteDescription");
+    try generator.addInterface("AVAudioSessionChannelDescription");
+
+    try generator.addProtocol("AVAudioSessionDelegate");
+}
+
+fn usage() void {
+    std.log.warn(
+        \\benchmark [options]
+        \\
+        \\Options:
+        \\  --mode  Metal,AudioSession  which code to generate
+        \\  --help
+        \\
+    , .{});
+}
+
+const Mode = enum {
+    metal,
+    audio_session,
+};
+
 pub fn main() anyerror!void {
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 8 }){};
     defer std.debug.assert(general_purpose_allocator.deinit() == .ok);
 
     const allocator = general_purpose_allocator.allocator();
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    var mode: Mode = .metal;
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--mode")) {
+            i += 1;
+            if (i == args.len) {
+                usage();
+                std.os.exit(1);
+            }
+            mode = blk: {
+                if (std.mem.eql(u8, args[i], "Metal")) break :blk .metal;
+                if (std.mem.eql(u8, args[i], "AudioSession")) break :blk .audio_session;
+                usage();
+                std.os.exit(1);
+            };
+        }
+    }
 
     var file = try std.fs.cwd().openFile("headers.json", .{});
     defer file.close();
@@ -1922,8 +1978,10 @@ pub fn main() anyerror!void {
     var generator = Generator(@TypeOf(stdout)).init(allocator, stdout);
     defer generator.deinit();
 
-    try generateMetal(&generator);
-
+    switch (mode) {
+        .metal => try generateMetal(&generator),
+        .audio_session => try generateAudioSession(&generator),
+    }
     try generator.generate();
 }
 

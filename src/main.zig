@@ -1894,7 +1894,7 @@ fn generateMetal(generator: anytype) !void {
     try generator.addProtocol("MTLVisibleFunctionTable");
 }
 
-fn generateAudioSession(generator: anytype) !void {
+fn generateAVFAudio(generator: anytype) !void {
     try generator.addEnum("AVAudioSessionCategoryOptions");
     try generator.addEnum("AVAudioSessionRouteSharingPolicy");
     try generator.addEnum("AVAudioSessionPortOverride");
@@ -1916,18 +1916,18 @@ fn generateAudioSession(generator: anytype) !void {
 
 fn usage() void {
     std.log.warn(
-        \\benchmark [options]
+        \\mach-objc-generator [options]
         \\
         \\Options:
-        \\  --mode  Metal,AudioSession  which code to generate
+        \\  --framework  Metal,AVFAudio  which code to generate
         \\  --help
         \\
     , .{});
 }
 
-const Mode = enum {
+const Framework = enum {
     metal,
-    audio_session,
+    avf_audio,
 };
 
 pub fn main() anyerror!void {
@@ -1939,18 +1939,18 @@ pub fn main() anyerror!void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    var mode: Mode = .metal;
+    var framework: Framework = .metal;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--mode")) {
+        if (std.mem.eql(u8, args[i], "--framework")) {
             i += 1;
             if (i == args.len) {
                 usage();
                 std.os.exit(1);
             }
-            mode = blk: {
+            framework = blk: {
                 if (std.mem.eql(u8, args[i], "Metal")) break :blk .metal;
-                if (std.mem.eql(u8, args[i], "AudioSession")) break :blk .audio_session;
+                if (std.mem.eql(u8, args[i], "AVFAudio")) break :blk .avf_audio;
                 usage();
                 std.os.exit(1);
             };
@@ -1978,9 +1978,9 @@ pub fn main() anyerror!void {
     var generator = Generator(@TypeOf(stdout)).init(allocator, stdout);
     defer generator.deinit();
 
-    switch (mode) {
+    switch (framework) {
         .metal => try generateMetal(&generator),
-        .audio_session => try generateAudioSession(&generator),
+        .audio_session => try generateAVFAudio(&generator),
     }
     try generator.generate();
 }

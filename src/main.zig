@@ -1980,7 +1980,7 @@ pub fn main() anyerror!void {
 
     switch (framework) {
         .metal => try generateMetal(&generator),
-        .audio_session => try generateAVFAudio(&generator),
+        .avf_audio => try generateAVFAudio(&generator),
     }
     try generator.generate();
 }

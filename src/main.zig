@@ -1506,6 +1506,7 @@ fn generateMetal(generator: anytype) !void {
     try generator.addEnum("MTLDataType");
     try generator.addEnum("MTLBindingType");
     try generator.addEnum("MTLArgumentType");
+    try generator.addEnum("MTLArgumentAccess");
     try generator.addInterface("MTLType");
     try generator.addInterface("MTLStructMember");
     try generator.addInterface("MTLStructType");

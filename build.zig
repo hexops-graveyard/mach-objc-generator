@@ -16,11 +16,6 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&testStep(b, optimize, target).step);
-}
-
-pub fn testStep(b: *std.Build, optimize: std.builtin.OptimizeMode, target: std.zig.CrossTarget) *std.build.RunStep {
     const main_tests = b.addTest(.{
         .name = "mach-objc-generator-tests",
         .root_source_file = .{ .path = "src/main.zig" },
@@ -28,5 +23,6 @@ pub fn testStep(b: *std.Build, optimize: std.builtin.OptimizeMode, target: std.z
         .optimize = optimize,
     });
     b.installArtifact(main_tests);
-    return b.addRunArtifact(main_tests);
+    const test_step = b.step("test", "Run library tests");
+    test_step.dependOn(&b.addRunArtifact(main_tests).step);
 }

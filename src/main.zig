@@ -1915,12 +1915,16 @@ fn generateAVFAudio(generator: anytype) !void {
     try generator.addProtocol("AVAudioSessionDelegate");
 }
 
+fn generateCoreMIDI(generator: anytype) !void {
+    try generator.addProtocol("MIDIInputPortCreateWithProtocol");
+}
+
 fn usage() void {
     std.log.warn(
         \\mach-objc-generator [options]
         \\
         \\Options:
-        \\  --framework  Metal,AVFAudio  which code to generate
+        \\  --framework  Metal,AVFAudio,CoreMIDI  which code to generate
         \\  --help
         \\
     , .{});
@@ -1929,6 +1933,7 @@ fn usage() void {
 const Framework = enum {
     metal,
     avf_audio,
+    core_midi,
 };
 
 pub fn main() anyerror!void {
@@ -1952,6 +1957,7 @@ pub fn main() anyerror!void {
             framework = blk: {
                 if (std.mem.eql(u8, args[i], "Metal")) break :blk .metal;
                 if (std.mem.eql(u8, args[i], "AVFAudio")) break :blk .avf_audio;
+                if (std.mem.eql(u8, args[i], "CoreMIDI")) break :blk .core_midi;
                 usage();
                 std.os.exit(1);
             };
@@ -1982,6 +1988,7 @@ pub fn main() anyerror!void {
     switch (framework) {
         .metal => try generateMetal(&generator),
         .avf_audio => try generateAVFAudio(&generator),
+        .core_midi => try generateCoreMIDI(&generator),
     }
     try generator.generate();
 }
